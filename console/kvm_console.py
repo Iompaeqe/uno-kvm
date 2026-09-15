@@ -177,8 +177,13 @@ def list_serial():
         print(f"  {p.device:<14} {vid}  {p.description}")
 
 
-def find_video():
-    """Linux: first USB capture device (the dongle registers two nodes; index0 streams).
+def find_video(strict=False):
+    """Locate the capture device. With strict=True, return None rather than falling back
+    to any old camera, so callers can tell "the capture stick is attached" apart from
+    "something with a lens exists". That distinction is what lets the console decide
+    whether to start at all.
+
+    Linux: first USB capture device (the dongle registers two nodes; index0 streams).
     Windows: probe cameras 0-4 and take the first that delivers a 1080p frame — the
     capture stick does, a laptop webcam usually does not."""
     if os.name != "nt":
@@ -206,7 +211,7 @@ def find_video():
                 return dev
             if ok and fallback is None:
                 fallback = dev
-        return fallback or "0"
+        return None if strict else (fallback or "0")
     import cv2
     fallback = None
     for i in range(5):
@@ -225,7 +230,7 @@ def find_video():
             return str(i)
         if ok and fallback is None:
             fallback = str(i)
-    return fallback or "0"
+    return None if strict else (fallback or "0")
 
 
 def _fourcc_str(v):
@@ -406,6 +411,9 @@ def main():
                     help="measure what the capture device really delivers per backend/format/size, then exit")
     ap.add_argument("--snapshot", metavar="PATH",
                     help="save one captured frame to PATH as JPEG and exit, without opening a window")
+    ap.add_argument("--check-devices", action="store_true",
+                    help="exit 0 if both the serial adapter and a real capture device are attached, "
+                         "1 otherwise; used to decide whether to start the console at boot")
     args = ap.parse_args()
 
     if args.list:
@@ -414,6 +422,12 @@ def main():
     if args.probe:
         probe_video(args.video)
         return 0
+    if args.check_devices:
+        port = args.serial or find_serial()
+        cap = find_video(strict=True) if args.video == "auto" else args.video
+        print(f"serial adapter: {port or 'not attached'}")
+        print(f"capture device: {cap or 'not attached'}")
+        return 0 if (port and cap) else 1
     if args.snapshot:
         sw, sh = (int(x) for x in args.size.lower().split("x"))
         return snapshot_video(args.video, args.snapshot, sw, sh, args.fps)

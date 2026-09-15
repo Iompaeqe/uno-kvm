@@ -71,15 +71,25 @@ xset s off -dpms
 # key positions and the target's layout decides what they type.
 exec python3 $APP_DIR/kvm_console.py --fullscreen --video auto
 EOF
-cat > "$HOME_DIR/.bash_profile" <<'EOF'
-# tty1 only: run the KVM console under X, restarting it when it exits.
-# Ctrl+Alt+F2 gives a plain shell. A fast crash loop backs off so the box stays usable.
-if [ -z "${DISPLAY:-}" ] && [ "$(tty)" = "/dev/tty1" ]; then
-  while true; do
-    start=$(date +%s)
-    startx -- -nocursor >/dev/null 2>&1
-    [ $(( $(date +%s) - start )) -lt 5 ] && sleep 10 || sleep 2
-  done
+cat > "$HOME_DIR/.bash_profile" <<EOF
+# tty1 only. Start the console ONLY when its hardware is actually attached, so a boot
+# with nothing plugged in leaves an ordinary Debian shell instead of a dead viewer.
+# The same check runs again after the console exits, so unplugging and quitting drops
+# you back to the shell rather than looping on absent hardware.
+# Ctrl+Alt+F2 is always a normal login prompt.
+if [ -z "\${DISPLAY:-}" ] && [ "\$(tty)" = "/dev/tty1" ]; then
+  if python3 $APP_DIR/kvm_console.py --check-devices; then
+    while true; do
+      start=\$(date +%s)
+      startx -- -nocursor >/dev/null 2>&1
+      python3 $APP_DIR/kvm_console.py --check-devices >/dev/null 2>&1 || break
+      [ \$(( \$(date +%s) - start )) -lt 5 ] && sleep 10 || sleep 2
+    done
+  fi
+  echo
+  echo "KVM hardware not attached. Connect the USB-serial adapter and the HDMI capture"
+  echo "stick, then run:  startx"
+  echo
 fi
 EOF
 chown "$USER_NAME:$USER_NAME" "$HOME_DIR/.xinitrc" "$HOME_DIR/.bash_profile"
