@@ -543,7 +543,8 @@ def main():
             status = f"CAPTURING  |  Pause = release  |  {hid} {leds}"
             color = (120, 220, 120) if link.ok() else (255, 120, 80)
         else:
-            status = f"RELEASED  |  Pause/Enter/click = capture   F = fullscreen   Q = quit  |  {hid}"
+            status = (f"RELEASED  |  Pause/Enter/click = capture   F = fullscreen   "
+                      f"Ctrl+Alt+F2 = shell   Q = quit  |  {hid}")
             color = (230, 200, 90)
         bar = font.render(status, True, color)
         screen.blit(bar, (8, sh - bar.get_height() - 6))
