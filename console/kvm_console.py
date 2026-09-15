@@ -549,7 +549,12 @@ def main():
                     scale = min(sw / w, sh / h)
                     tw, th = int(w * scale), int(h * scale)
                     if (tw, th) != (w, h):
-                        surf = pygame.transform.scale(surf, (tw, th))
+                        # smoothscale, not scale: the console is usually larger than this
+                        # panel, and plain scale point-samples, so shrinking 1920 onto 1366
+                        # silently drops about three of every ten rows and columns. Console
+                        # glyphs have single-pixel strokes, so those strokes vanish outright
+                        # and text turns to mush. Area-averaging keeps them as grey instead.
+                        surf = pygame.transform.smoothscale(surf, (tw, th))
                     surf_cache = (surf, seq)
                 surf = surf_cache[0]
                 screen.blit(surf, ((sw - surf.get_width()) // 2, (sh - surf.get_height()) // 2))
