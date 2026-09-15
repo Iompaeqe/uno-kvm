@@ -27,7 +27,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -f "$HERE/kvm_console.py" ] || { echo "kvm_console.py not found next to this script"; exit 1; }
 
-USER_NAME=kvm
+# Deliberately not "kvm": Debian ships a system group of that name for /dev/kvm access,
+# and adduser refuses to create a user whose matching group name is already taken.
+USER_NAME=kvmconsole
 APP_DIR=/opt/uno-kvm
 LID_ACTION=suspend        # suspend | poweroff
 
@@ -42,7 +44,8 @@ apt-get install -y -qq --no-install-recommends \
   xinit x11-xserver-utils fonts-dejavu-core >/dev/null
 
 echo "== user $USER_NAME"
-id "$USER_NAME" &>/dev/null || adduser --disabled-password --gecos "KVM console" "$USER_NAME"
+id "$USER_NAME" &>/dev/null || adduser --disabled-password --gecos "KVM console" "$USER_NAME" \
+  || { echo "could not create user $USER_NAME"; exit 1; }
 usermod -aG dialout,video,input,render,tty "$USER_NAME" 2>/dev/null || usermod -aG dialout,video,input,tty "$USER_NAME"
 
 echo "== app -> $APP_DIR"
