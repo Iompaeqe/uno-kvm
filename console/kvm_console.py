@@ -183,10 +183,30 @@ def find_video():
     capture stick does, a laptop webcam usually does not."""
     if os.name != "nt":
         import glob
+        import cv2
+        # A console laptop usually has a built-in webcam too, and it can easily sort ahead
+        # of the capture stick by name. Pick by capability instead: only the capture stick
+        # delivers a full 1080-wide frame, so a webcam never wins by accident.
         nodes = sorted(glob.glob("/dev/v4l/by-id/*usb*video-index0")) or sorted(glob.glob("/dev/video*"))
-        if nodes:
-            return os.path.realpath(nodes[0])
-        return "0"
+        fallback = None
+        for node in nodes:
+            dev = os.path.realpath(node)
+            cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
+            if not cap.isOpened():
+                cap.release()
+                continue
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+            ok, frm = cap.read()
+            w = frm.shape[1] if ok and frm is not None else 0
+            cap.release()
+            print(f"video candidate {dev}: {('%dpx wide' % w) if ok else 'no frame'}")
+            if ok and w >= 1900:
+                return dev
+            if ok and fallback is None:
+                fallback = dev
+        return fallback or "0"
     import cv2
     fallback = None
     for i in range(5):
