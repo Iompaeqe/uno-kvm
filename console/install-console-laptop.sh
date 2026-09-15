@@ -9,11 +9,15 @@
 # What it does (idempotent, re-run after edits to kvm_console.py):
 #   - installs python3-pygame / python3-opencv / python3-serial + a minimal X server
 #   - creates user "kvm" (no password login needed: tty1 auto-logs it in)
-#   - copies kvm_console.py to /opt/uno-kvm
+#   - copies kvm_console.py to APP_DIR
 #   - tty1 autologin -> startx -> kvm_console.py --fullscreen; quitting the app (Q) just
-#     restarts it a couple of seconds later. Ctrl+Alt+F2 gives a normal login shell.
-#   - lid close does NOT suspend (the console must be usable the moment it is opened);
-#     the screen blanks after 10 min instead.
+#     restarts it. Ctrl+Alt+F2 gives a normal login shell.
+#   - boots straight in: no GRUB menu wait, no kernel log wall
+#   - closing the lid SUSPENDS the machine; opening it resumes back into the console.
+#     The console re-acquires the capture stick by itself after a resume.
+#
+# This box is a console, not a server: it is meant to be shut or powered off when unused.
+# Set LID_ACTION=poweroff below if suspend/resume proves unreliable on the hardware.
 #
 # Afterwards: plug the CH340 and the HDMI capture stick into the laptop, open the lid,
 # and the target's screen is there. Pause captures/releases the keyboard + trackpad.
@@ -25,13 +29,16 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 USER_NAME=kvm
 APP_DIR=/opt/uno-kvm
+LID_ACTION=suspend        # suspend | poweroff
 
 echo "== packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
+# No xserver-xorg-video-intel on purpose: the legacy Intel driver causes more breakage than
+# it fixes. The modesetting driver inside xserver-xorg-core handles modern and old Intel GPUs.
 apt-get install -y -qq --no-install-recommends \
   python3 python3-pygame python3-opencv python3-serial python3-numpy \
-  xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-fbdev xserver-xorg-video-intel \
+  xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-fbdev \
   xinit x11-xserver-utils fonts-dejavu-core >/dev/null
 
 echo "== user $USER_NAME"
@@ -52,45 +59,61 @@ EOF
 
 echo "== X session that is just the console"
 HOME_DIR="$(getent passwd "$USER_NAME" | cut -d: -f6)"
-cat > "$HOME_DIR/.xinitrc" <<'EOF'
+cat > "$HOME_DIR/.xinitrc" <<EOF
 #!/bin/sh
-xset s off
-xset dpms 600 600 600
-# Keys go to the target, so keep the laptop's own layout out of the way: the app sends
-# physical key positions, the target's layout decides what they type.
-exec python3 /opt/uno-kvm/kvm_console.py --fullscreen --video auto
+# No blanking: the lid switch handles power saving, and a screen that blanks while you are
+# watching the target's installer is just irritating.
+xset s off -dpms
+# Keys go to the target, so the laptop's own layout is irrelevant: the app sends physical
+# key positions and the target's layout decides what they type.
+exec python3 $APP_DIR/kvm_console.py --fullscreen --video auto
 EOF
 cat > "$HOME_DIR/.bash_profile" <<'EOF'
-# tty1 only: run the KVM console under X; restart it when it exits. Ctrl+Alt+F2 = plain shell.
+# tty1 only: run the KVM console under X, restarting it when it exits.
+# Ctrl+Alt+F2 gives a plain shell. A fast crash loop backs off so the box stays usable.
 if [ -z "${DISPLAY:-}" ] && [ "$(tty)" = "/dev/tty1" ]; then
   while true; do
+    start=$(date +%s)
     startx -- -nocursor >/dev/null 2>&1
-    sleep 2
+    [ $(( $(date +%s) - start )) -lt 5 ] && sleep 10 || sleep 2
   done
 fi
 EOF
 chown "$USER_NAME:$USER_NAME" "$HOME_DIR/.xinitrc" "$HOME_DIR/.bash_profile"
 chmod 755 "$HOME_DIR/.xinitrc"
-# Allow startx from a console login (Debian default "console" already permits it; be explicit).
+# Allow startx from a console login (Debian's default is already "console"; be explicit).
 if [ -f /etc/X11/Xwrapper.config ]; then
   sed -i 's/^allowed_users=.*/allowed_users=console/' /etc/X11/Xwrapper.config
 else
   echo "allowed_users=console" > /etc/X11/Xwrapper.config
 fi
 
-echo "== lid: stay awake"
+echo "== lid closes the machine down ($LID_ACTION), power button powers off"
 install -d /etc/systemd/logind.conf.d
-cat > /etc/systemd/logind.conf.d/kvm-console.conf <<'EOF'
+cat > /etc/systemd/logind.conf.d/kvm-console.conf <<EOF
 [Login]
-HandleLidSwitch=ignore
-HandleLidSwitchExternalPower=ignore
-HandleLidSwitchDocked=ignore
+HandleLidSwitch=$LID_ACTION
+HandleLidSwitchExternalPower=$LID_ACTION
+HandleLidSwitchDocked=$LID_ACTION
+HandlePowerKey=poweroff
+IdleAction=ignore
 EOF
+
+echo "== quiet, immediate boot"
+if [ -f /etc/default/grub ]; then
+  sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub
+  grep -q '^GRUB_TIMEOUT=' /etc/default/grub || echo 'GRUB_TIMEOUT=0' >> /etc/default/grub
+  sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=3 systemd.show_status=false"/' /etc/default/grub
+  grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub || \
+    echo 'GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=3 systemd.show_status=false"' >> /etc/default/grub
+  update-grub >/dev/null 2>&1 || true
+fi
+
 systemctl restart systemd-logind 2>/dev/null || true
 systemctl daemon-reload
 
 echo
-echo "Done. Reboot to start the console (or: systemctl restart getty@tty1)."
+echo "Done. Reboot to start the console."
 echo "Devices seen right now:"
 ls -1 /dev/serial/by-id/ 2>/dev/null | sed 's/^/  serial: /' || echo "  serial: none"
 ls -1 /dev/v4l/by-id/ 2>/dev/null | sed 's/^/  video:  /' || echo "  video:  none"

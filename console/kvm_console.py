@@ -250,6 +250,28 @@ def probe_video(source):
             cap.release()
 
 
+def snapshot_video(source, path, width, height, fps, warmup=20):
+    """Grab one frame and write it to a JPEG, with no window. Works over SSH on a
+    machine whose desktop session is locked, which a pygame window cannot do."""
+    import cv2
+    v = Video(source, width, height, fps)
+    frame, t0 = None, time.time()
+    while time.time() - t0 < 15:
+        with v.lock:
+            if v.seq >= warmup and v.rgb is not None:
+                frame = v.rgb.copy()
+                break
+        time.sleep(0.1)
+    v.alive = False
+    if frame is None:
+        print("snapshot: no frames arrived")
+        return 1
+    bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    cv2.imwrite(path, bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    print(f"snapshot: wrote {path}, {bgr.shape[1]}x{bgr.shape[0]}, brightness {bgr.mean():.0f}/255")
+    return 0
+
+
 # ------------------------------------------------------------------- video
 class Video:
     """Grabs frames from the capture dongle on a thread; keeps the latest RGB frame."""
@@ -274,12 +296,35 @@ class Video:
         self.cap.set(cv2.CAP_PROP_FPS, fps)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         print(f"video: FOURCC now {_fourcc_str(self.cap.get(cv2.CAP_PROP_FOURCC))}")
+        self._open_args = (src, backend, width, height, fps)
         self.lock = threading.Lock()
         self.rgb = None
         self.seq = 0
         self.last_frame = 0.0
         self.alive = True
         threading.Thread(target=self._loop, daemon=True).start()
+
+    def _reopen(self):
+        """Re-acquire the capture device. The old handle never recovers once the device
+        goes away, which happens every time the laptop suspends and resumes, and whenever
+        the stick is unplugged and put back."""
+        cv2 = self.cv2
+        src, backend, w, h, fps = self._open_args
+        try:
+            self.cap.release()
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(1.0)
+        cap = cv2.VideoCapture(src, backend)
+        if not cap.isOpened():
+            return False
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+        cap.set(cv2.CAP_PROP_FPS, fps)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.cap = cap
+        return True
 
     def _loop(self):
         cv2 = self.cv2
@@ -288,10 +333,18 @@ class Video:
             ok, bgr = self.cap.read()
             if not ok:
                 fails += 1
-                if fails in (1, 25, 250):
+                if fails in (1, 25):
                     print(f"video: read failed x{fails}")
+                # About five seconds of unbroken failure means the device is gone rather
+                # than glitching, so take a new handle instead of sitting on a dead one.
+                if fails % 25 == 0:
+                    print("video: reopening capture device")
+                    if self._reopen():
+                        print("video: reopened")
+                        fails = 0
                 time.sleep(0.2)
                 continue
+            fails = 0
             if self.seq == 0:
                 print(f"video: first frame {bgr.shape[1]}x{bgr.shape[0]}, mean brightness {bgr.mean():.0f}/255")
                 self._t_mark, self._seq_mark = time.time(), 0
@@ -331,6 +384,8 @@ def main():
                     help="tell the 16U2 to reboot into HoodLoader2 (for re-flashing) and exit")
     ap.add_argument("--probe", action="store_true",
                     help="measure what the capture device really delivers per backend/format/size, then exit")
+    ap.add_argument("--snapshot", metavar="PATH",
+                    help="save one captured frame to PATH as JPEG and exit, without opening a window")
     args = ap.parse_args()
 
     if args.list:
@@ -339,6 +394,9 @@ def main():
     if args.probe:
         probe_video(args.video)
         return 0
+    if args.snapshot:
+        sw, sh = (int(x) for x in args.size.lower().split("x"))
+        return snapshot_video(args.video, args.snapshot, sw, sh, args.fps)
 
     port = args.serial or find_serial()
     if not port:

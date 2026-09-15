@@ -190,9 +190,13 @@ sudo reboot
 ```
 
 The laptop then boots straight into the console, fullscreen, no login (tty1 auto-logs a `kvm`
-user that starts a bare X server running the app). Q restarts the console two seconds later,
-Ctrl+Alt+F2 is a normal shell, lid close does not suspend (the screen blanks after 10 min), so
-the console is live the moment you open the lid.
+user that starts a bare X server running the app). Q restarts the console, Ctrl+Alt+F2 is a
+normal shell, and there is no GRUB menu wait or kernel log wall on the way in.
+
+Closing the lid suspends the machine, and opening it resumes straight back into the console,
+which re-acquires the capture stick by itself. This box is a console rather than a server, so
+it is meant to be shut or powered off when unused. If suspend and resume turn out to be
+unreliable on your hardware, set `LID_ACTION=poweroff` near the top of the install script.
 
 ## 4. Things that bit us (read before debugging)
 
