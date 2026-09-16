@@ -82,7 +82,7 @@ if [ -z "\${DISPLAY:-}" ] && [ "\$(tty)" = "/dev/tty1" ]; then
     while true; do
       start=\$(date +%s)
       startx -- -nocursor >/dev/null 2>&1
-      python3 $APP_DIR/kvm_console.py --check-devices >/dev/null 2>&1 || break
+      python3 $APP_DIR/kvm_console.py --check-devices --wait 2 >/dev/null 2>&1 || break
       [ \$(( \$(date +%s) - start )) -lt 5 ] && sleep 10 || sleep 2
     done
   fi

@@ -414,6 +414,9 @@ def main():
     ap.add_argument("--check-devices", action="store_true",
                     help="exit 0 if both the serial adapter and a real capture device are attached, "
                          "1 otherwise; used to decide whether to start the console at boot")
+    ap.add_argument("--wait", type=float, default=10.0, metavar="SECONDS",
+                    help="with --check-devices, keep looking this long before giving up "
+                         "(default 10), so a cold boot does not lose the race with USB enumeration")
     args = ap.parse_args()
 
     if args.list:
@@ -423,8 +426,19 @@ def main():
         probe_video(args.video)
         return 0
     if args.check_devices:
-        port = args.serial or find_serial()
-        cap = find_video(strict=True) if args.video == "auto" else args.video
+        # A cold boot reaches the login shell in seconds, which can beat udev finishing
+        # USB enumeration. Looking once would drop to a shell with the hardware about to
+        # appear, so keep asking until the deadline, re-probing only what is still missing.
+        deadline = time.time() + args.wait
+        port = cap = None
+        while True:
+            if port is None:
+                port = args.serial or find_serial()
+            if cap is None:
+                cap = find_video(strict=True) if args.video == "auto" else args.video
+            if (port and cap) or time.time() >= deadline:
+                break
+            time.sleep(1.0)
         print(f"serial adapter: {port or 'not attached'}")
         print(f"capture device: {cap or 'not attached'}")
         return 0 if (port and cap) else 1
